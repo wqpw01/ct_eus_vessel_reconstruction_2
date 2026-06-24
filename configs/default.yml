@@ -1,0 +1,47 @@
+project:
+  case_id: CT-0021
+
+paths:
+  raw_data: /mnt/c/Users/zhangyutang/Desktop/CT-EUS定位项目/数据/血管重建病例/CT-0021
+  reference_labels: /mnt/c/Users/zhangyutang/Desktop/CT-EUS血管重建结果/CT-0021-union-nrrd
+  output_root: /mnt/c/Users/zhangyutang/Desktop/CT-EUS血管重建结果/CT-EUS-vessel-pipeline-runs
+  work_root: /home/zyt/ct_eus_vessel_pipeline/work
+
+phase:
+  arterial_keywords:
+    - arterial
+    - artery
+    - a phase
+    - 动脉
+  portal_keywords:
+    - portal
+    - pv
+    - 门静脉
+  venous_keywords:
+    - venous
+    - vein
+    - delayed
+    - 静脉
+  required_phases:
+    - arterial
+    - portal
+
+thresholds:
+  vessel_hu_floor: 80
+  vessel_hu_ceiling: 300
+  bone_hu_floor: 700
+
+components:
+  min_component_voxels: 8
+
+totalsegmentator:
+  enabled: true
+  fast: true
+  roi_subset:
+    - liver
+    - spleen
+    - kidney_left
+    - kidney_right
+    - vertebrae
+    - rib_left_1
+    - rib_right_1
