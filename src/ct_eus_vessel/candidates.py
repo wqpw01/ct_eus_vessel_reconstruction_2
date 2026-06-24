@@ -24,6 +24,7 @@ def extract_vessel_candidates(
     min_component_voxels: int = 8,
     hu_floor: float = 80.0,
     hu_ceiling: float = 300.0,
+    hu_window: HUWindow | None = None,
 ) -> CandidateResult:
     body = np.asarray(body_mask, dtype=bool)
     exclusion = np.zeros_like(body, dtype=bool) if exclusion_mask is None else np.asarray(exclusion_mask, dtype=bool)
@@ -31,7 +32,7 @@ def extract_vessel_candidates(
     if hu.shape != body.shape or exclusion.shape != body.shape:
         raise ValueError("hu_volume, body_mask and exclusion_mask must have the same shape")
 
-    window = estimate_vessel_hu_window(
+    window = hu_window or estimate_vessel_hu_window(
         hu,
         body_mask=body,
         exclusion_mask=exclusion,

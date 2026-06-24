@@ -16,6 +16,7 @@ from .config import ProjectConfig
 from .dicom_index import index_dicom_series, write_series_index_csv
 from .geometry import bounding_box_zyx
 from .iteration import IterationRecord, write_iteration_log
+from .thresholds import estimate_phase_hu_window
 
 
 PHASE_LABELS = {"arterial": 1, "portal": 2, "venous": 3}
@@ -100,6 +101,9 @@ TOTAL_SEGMENTATOR_VESSEL_ROIS = [
     "portal_vein_and_splenic_vein",
 ]
 TOTAL_SEGMENTATOR_ROIS = TOTAL_SEGMENTATOR_EXCLUSION_ROIS + TOTAL_SEGMENTATOR_VESSEL_ROIS
+EXCLUSION_DILATION_MM = 2.5
+BONE_DILATION_MM = 1.5
+VESSELNESS_PERCENTILES = {"arterial": 75.0, "portal": 80.0, "venous": 80.0}
 
 
 @dataclass(frozen=True)
@@ -195,8 +199,8 @@ def run_reconstruction(
     for phase, image in phase_images.items():
         exclusion = build_exclusion_mask(image, reference_image, ts_masks)
         seed = build_vessel_seed_mask(phase, image, reference_image, ts_masks)
-        vesselness = compute_slice_frangi(sitk.GetArrayFromImage(image), sigmas=(1.0, 2.0, 3.5)) if run_frangi else None
-        segmented, metrics = segment_phase_vessels(image, exclusion, seed, vesselness)
+        vesselness = compute_volume_frangi(sitk.GetArrayFromImage(image), sigmas=(1.0, 2.0, 3.5)) if run_frangi else None
+        segmented, metrics = segment_phase_vessels(phase, image, exclusion, seed, vesselness)
         mask_image = array_to_image(segmented.astype(np.uint8), image)
         mask_reference = resample_mask(mask_image, reference_image)
         mask_reference_arr = sitk.GetArrayFromImage(mask_reference).astype(bool)
@@ -280,11 +284,13 @@ def load_totalseg_masks(totalseg_dir: Path) -> dict[str, sitk.Image]:
 
 def build_exclusion_mask(image: sitk.Image, reference_image: sitk.Image, ts_masks: dict[str, sitk.Image]) -> np.ndarray:
     hu = sitk.GetArrayFromImage(image)
-    exclusion = hu > 700
+    spacing_xyz = image.GetSpacing()
+    exclusion = dilate_mask_by_mm(hu > 700, spacing_xyz, BONE_DILATION_MM)
     for name in TOTAL_SEGMENTATOR_EXCLUSION_ROIS:
         if name not in ts_masks:
             continue
-        exclusion |= sitk.GetArrayFromImage(resample_mask(ts_masks[name], image, reference_image)).astype(bool)
+        roi = sitk.GetArrayFromImage(resample_mask(ts_masks[name], image, reference_image)).astype(bool)
+        exclusion |= dilate_mask_by_mm(roi, spacing_xyz, EXCLUSION_DILATION_MM)
     return exclusion
 
 
@@ -307,6 +313,7 @@ def build_vessel_seed_mask(
 
 
 def segment_phase_vessels(
+    phase: str,
     image: sitk.Image,
     exclusion_mask: np.ndarray,
     seed_mask: np.ndarray,
@@ -314,22 +321,34 @@ def segment_phase_vessels(
 ) -> tuple[np.ndarray, dict[str, Any]]:
     hu = sitk.GetArrayFromImage(image)
     body = create_body_mask(hu)
-    exclusion = np.asarray(exclusion_mask, dtype=bool) & ~seed_mask
+    exclusion = apply_exclusion_seed_override(exclusion_mask, seed_mask)
+    phase_window = estimate_phase_hu_window(
+        phase,
+        hu,
+        body_mask=body,
+        exclusion_mask=exclusion,
+        seed_mask=seed_mask,
+    )
     candidate = extract_vessel_candidates(
         hu,
         body_mask=body,
         exclusion_mask=exclusion,
         min_component_voxels=120,
-        hu_floor=80,
-        hu_ceiling=320,
+        hu_window=phase_window,
     )
-    mask = candidate.mask | seed_mask
+    vesselness_min = 0.0
     if vesselness is not None and candidate.mask.any():
         values = vesselness[candidate.mask]
         positive = values[values > 0]
-        vesselness_min = float(np.percentile(positive, 70)) if positive.size else 0.0
-        mask = ((candidate.mask & (vesselness >= vesselness_min)) | seed_mask) & body
-    mask = ndi.binary_closing(mask, structure=np.ones((3, 3, 3), dtype=bool))
+        percentile = VESSELNESS_PERCENTILES.get(phase, 80.0)
+        vesselness_min = float(np.percentile(positive, percentile)) if positive.size else 0.0
+    mask = grow_seed_connected_mask(
+        candidate.mask,
+        seed_mask,
+        vesselness,
+        vesselness_min=vesselness_min,
+        recovery_iterations=1,
+    ) & body
     labels, count = ndi.label(mask)
     if count > 0:
         sizes = np.bincount(labels.ravel())
@@ -339,12 +358,63 @@ def segment_phase_vessels(
     metrics = {
         "native_voxels": int(mask.sum()),
         "hu_window": {"low": candidate.hu_window.low, "high": candidate.hu_window.high},
+        "vesselness_min": vesselness_min,
+        "candidate_voxels": int(candidate.mask.sum()),
         "seed_voxels": int(seed_mask.sum()),
         "body_voxels": int(body.sum()),
         "exclusion_voxels": int(exclusion.sum()),
+        "exclusion_dilation_mm": EXCLUSION_DILATION_MM,
+        "bone_dilation_mm": BONE_DILATION_MM,
         "native_bbox_zyx": bounding_box_zyx(mask),
     }
     return mask.astype(bool), metrics
+
+
+def dilate_mask_by_mm(mask: np.ndarray, spacing_xyz: tuple[float, float, float], radius_mm: float) -> np.ndarray:
+    binary = np.asarray(mask, dtype=bool)
+    if radius_mm <= 0:
+        return binary.copy()
+    spacing_zyx = spacing_xyz[::-1]
+    radius_voxels = [max(1, int(np.ceil(radius_mm / spacing))) for spacing in spacing_zyx]
+    grids = np.ogrid[tuple(slice(-radius, radius + 1) for radius in radius_voxels)]
+    distance_sq = sum((axis * spacing) ** 2 for axis, spacing in zip(grids, spacing_zyx, strict=True))
+    structure = distance_sq <= radius_mm**2
+    return ndi.binary_dilation(binary, structure=structure)
+
+
+def apply_exclusion_seed_override(exclusion_mask: np.ndarray, seed_mask: np.ndarray) -> np.ndarray:
+    return np.asarray(exclusion_mask, dtype=bool) & ~np.asarray(seed_mask, dtype=bool)
+
+
+def grow_seed_connected_mask(
+    candidate_mask: np.ndarray,
+    seed_mask: np.ndarray,
+    vesselness: np.ndarray | None,
+    vesselness_min: float,
+    recovery_iterations: int = 1,
+) -> np.ndarray:
+    candidate = np.asarray(candidate_mask, dtype=bool)
+    seed = np.asarray(seed_mask, dtype=bool)
+    if candidate.shape != seed.shape:
+        raise ValueError("candidate_mask and seed_mask must have the same shape")
+    if vesselness is None:
+        core = candidate.copy()
+    else:
+        response = np.asarray(vesselness, dtype=np.float32)
+        if response.shape != candidate.shape:
+            raise ValueError("vesselness must have the same shape as candidate_mask")
+        core = candidate & (response >= float(vesselness_min))
+    if not seed.any():
+        return core
+    allowed = core | seed
+    grown = ndi.binary_propagation(seed, mask=allowed)
+    if recovery_iterations > 0:
+        grown |= ndi.binary_dilation(
+            grown,
+            structure=np.ones((3, 3, 3), dtype=bool),
+            iterations=int(recovery_iterations),
+        ) & candidate
+    return np.asarray(grown, dtype=bool)
 
 
 def create_body_mask(hu: np.ndarray) -> np.ndarray:
@@ -365,6 +435,48 @@ def compute_slice_frangi(hu: np.ndarray, sigmas: tuple[float, ...]) -> np.ndarra
     for z in range(normalized.shape[0]):
         response[z] = frangi(normalized[z], sigmas=sigmas, black_ridges=False)
     return np.nan_to_num(response, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def compute_volume_frangi(
+    hu: np.ndarray,
+    sigmas: tuple[float, ...],
+    max_slab_slices: int = 32,
+    overlap_slices: int = 6,
+) -> np.ndarray:
+    clipped = np.clip(np.asarray(hu, dtype=np.float32), -100, 320)
+    normalized = (clipped + 100.0) / 420.0
+    try:
+        if normalized.ndim == 3 and normalized.shape[0] > max_slab_slices > 0:
+            response = _slabbed_volume_frangi(normalized, sigmas, max_slab_slices, overlap_slices)
+        else:
+            response = frangi(normalized, sigmas=sigmas, black_ridges=False)
+    except Exception:
+        return compute_slice_frangi(hu, sigmas=sigmas)
+    return np.nan_to_num(np.asarray(response, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _slabbed_volume_frangi(
+    normalized: np.ndarray,
+    sigmas: tuple[float, ...],
+    max_slab_slices: int,
+    overlap_slices: int,
+) -> np.ndarray:
+    depth = normalized.shape[0]
+    response = np.zeros_like(normalized, dtype=np.float32)
+    core_start = 0
+    overlap = max(0, int(overlap_slices))
+    slab_size = max(1, int(max_slab_slices))
+    while core_start < depth:
+        core_end = min(depth, core_start + slab_size)
+        slab_start = max(0, core_start - overlap)
+        slab_end = min(depth, core_end + overlap)
+        slab = normalized[slab_start:slab_end]
+        slab_response = frangi(slab, sigmas=sigmas, black_ridges=False)
+        trim_start = core_start - slab_start
+        trim_end = trim_start + (core_end - core_start)
+        response[core_start:core_end] = np.asarray(slab_response, dtype=np.float32)[trim_start:trim_end]
+        core_start = core_end
+    return response
 
 
 def array_to_image(array: np.ndarray, reference: sitk.Image) -> sitk.Image:

@@ -1,6 +1,7 @@
 import numpy as np
 
 from ct_eus_vessel.candidates import extract_vessel_candidates
+from ct_eus_vessel.thresholds import HUWindow
 
 
 def test_extract_vessel_candidates_uses_hu_window_and_exclusion_mask() -> None:
@@ -42,3 +43,19 @@ def test_extract_vessel_candidates_can_gate_by_vesselness() -> None:
 
     assert result.mask[:, 2, 2].all()
     assert not result.mask[:, 5, 1:6].any()
+
+
+def test_extract_vessel_candidates_honors_explicit_hu_window() -> None:
+    volume = np.full((3, 5, 5), 40, dtype=np.float32)
+    body = np.ones_like(volume, dtype=bool)
+    volume[:, 2, 2] = 180
+
+    result = extract_vessel_candidates(
+        volume,
+        body_mask=body,
+        min_component_voxels=1,
+        hu_window=HUWindow(low=170, high=190),
+    )
+
+    assert result.mask[:, 2, 2].all()
+    assert int(result.mask.sum()) == 3
