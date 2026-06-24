@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .config import load_config
 from .dicom_index import index_dicom_series, write_series_index_csv
+from .evaluation import evaluate_prediction
 from .iteration import IterationRecord, write_iteration_log
 from .phase import choose_primary_series
 from .reconstruction import run_reconstruction
@@ -27,15 +28,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     reconstruct_parser.add_argument("--skip-totalseg", action="store_true")
     reconstruct_parser.add_argument("--skip-frangi", action="store_true")
 
+    eval_parser = subparsers.add_parser("evaluate", help="Evaluate reconstruction against labels without using them for reconstruction.")
+    eval_parser.add_argument("--prediction", type=Path, required=True)
+    eval_parser.add_argument("--label-image", type=Path, required=True)
+    eval_parser.add_argument("--label-map", type=Path, required=True)
+    eval_parser.add_argument("--output", type=Path, required=True)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    config = load_config(args.config)
 
     if args.command == "index":
+        config = load_config(args.config)
         rows = index_dicom_series(config.raw_data)
         output_dir = config.output_root / config.case_id / "index"
         csv_path = write_series_index_csv(rows, output_dir / "series_index.csv")
@@ -46,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "write-log":
+        config = load_config(args.config)
         output_dir = config.output_root / f"{config.case_id}-{args.version}"
         record = IterationRecord(
             version=args.version,
@@ -76,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "reconstruct":
+        config = load_config(args.config)
         result = run_reconstruction(
             config,
             version=args.version,
@@ -85,6 +94,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote reconstruction to {result.run_dir}")
         print(f"TotalSegmentator: {result.totalseg_status}")
         print(f"Fused voxels: {result.metrics['fused_voxels']}")
+        return 0
+
+    if args.command == "evaluate":
+        result = evaluate_prediction(
+            prediction_path=args.prediction,
+            label_image_path=args.label_image,
+            label_txt_path=args.label_map,
+            output_path=args.output,
+        )
+        metrics = result["vessel_metrics"]
+        print(f"Wrote evaluation to {args.output}")
+        print("Ground Truth used for evaluation only")
+        print(f"Dice: {metrics['dice']:.4f}")
+        print(f"Precision: {metrics['precision']:.4f}")
+        print(f"Recall: {metrics['recall']:.4f}")
+        if metrics.get("hausdorff_mm") is not None:
+            print(f"Hausdorff: {metrics['hausdorff_mm']:.4f} mm")
+            print(f"Average Hausdorff: {metrics['average_hausdorff_mm']:.4f} mm")
         return 0
 
     parser.error(f"Unknown command: {args.command}")

@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 from ct_eus_vessel.reconstruction import (
+    TOTAL_SEGMENTATOR_EXCLUSION_ROIS,
+    TOTAL_SEGMENTATOR_VESSEL_ROIS,
     assert_reference_labels_not_in_inputs,
     fuse_phase_masks,
     select_reconstruction_series,
@@ -50,3 +52,22 @@ def test_fuse_phase_masks_keeps_separate_multilabel_outputs() -> None:
     assert fused.multilabel[1, 1, 1] == 1
     assert fused.multilabel[1, 1, 2] == 2
     assert fused.multilabel[1, 1, 3] == 3
+
+
+def test_totalseg_exclusion_rois_cover_major_false_positive_organs_and_bones() -> None:
+    required = {
+        "stomach",
+        "pancreas",
+        "duodenum",
+        "small_bowel",
+        "colon",
+        "heart",
+        "lung_upper_lobe_left",
+        "lung_lower_lobe_right",
+        "rib_left_1",
+        "rib_right_12",
+        "sternum",
+    }
+
+    assert required.issubset(set(TOTAL_SEGMENTATOR_EXCLUSION_ROIS))
+    assert set(TOTAL_SEGMENTATOR_VESSEL_ROIS).isdisjoint(set(TOTAL_SEGMENTATOR_EXCLUSION_ROIS))
