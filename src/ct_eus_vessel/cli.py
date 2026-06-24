@@ -7,6 +7,7 @@ from .config import load_config
 from .dicom_index import index_dicom_series, write_series_index_csv
 from .iteration import IterationRecord, write_iteration_log
 from .phase import choose_primary_series
+from .reconstruction import run_reconstruction
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -19,6 +20,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     log_parser = subparsers.add_parser("write-log", help="Write a pipeline iteration log.")
     log_parser.add_argument("--config", type=Path, required=True)
     log_parser.add_argument("--version", required=True)
+
+    reconstruct_parser = subparsers.add_parser("reconstruct", help="Run real-data vessel reconstruction.")
+    reconstruct_parser.add_argument("--config", type=Path, required=True)
+    reconstruct_parser.add_argument("--version", default="v0.3-reconstruction")
+    reconstruct_parser.add_argument("--skip-totalseg", action="store_true")
+    reconstruct_parser.add_argument("--skip-frangi", action="store_true")
 
     return parser
 
@@ -66,6 +73,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         path = write_iteration_log(Path("docs/iterations"), record)
         print(f"Wrote {path}")
+        return 0
+
+    if args.command == "reconstruct":
+        result = run_reconstruction(
+            config,
+            version=args.version,
+            run_totalseg=not args.skip_totalseg,
+            run_frangi=not args.skip_frangi,
+        )
+        print(f"Wrote reconstruction to {result.run_dir}")
+        print(f"TotalSegmentator: {result.totalseg_status}")
+        print(f"Fused voxels: {result.metrics['fused_voxels']}")
         return 0
 
     parser.error(f"Unknown command: {args.command}")

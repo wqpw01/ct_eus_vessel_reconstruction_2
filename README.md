@@ -27,6 +27,7 @@ pip install -e ".[dev]"
 
 ```bash
 ct-eus-vessel index --config configs/default.yml
+ct-eus-vessel reconstruct --config configs/default.yml --version v0.3b-conservative
 ct-eus-vessel write-log --config configs/default.yml --version v0.1
 pytest
 ```
