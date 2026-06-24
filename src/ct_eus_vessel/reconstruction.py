@@ -545,7 +545,7 @@ def write_v03_iteration_log(
         pipeline_summary=[
             "真实 CT-0021 三期 DICOM 读取与动态期相选择",
             "TotalSegmentator 预训练模型前置器官/骨骼/血管锚点提取，不使用人工标注",
-            "HU 动态阈值、slice-wise Frangi 管状响应、连通域清理与多期融合",
+            "Seed 自适应分期 HU 窗、slabbed 3D Frangi 管状响应、seed-connected 生长与多期融合",
             "输出 Slicer NRRD、兼容 NIfTI、STL mesh、bbox 与 QC JSON",
         ],
         core_parameters={
@@ -578,8 +578,8 @@ def write_v03_iteration_log(
             "qc/reconstruction_summary.json",
         ],
         known_limits=[
-            "当前版本仍是自动候选重建，尚未用人工标注做 Dice/Hausdorff 评价",
-            "Frangi 当前为 slice-wise 近似，下一轮应补 3D spacing-aware Hessian 与拓扑桥接",
+            "当前版本仍是自动候选重建，人工标注仅用于 Dice/Hausdorff 等评价，不参与重建",
+            "Slabbed 3D Frangi 在本地 CPU 上耗时较高，后续应做 ROI 裁剪或 GPU/服务器加速",
             "TotalSegmentator 若输出缺失会自动降级为 HU 骨骼排除和体表 mask",
         ],
     )
