@@ -43,8 +43,65 @@ def choose_primary_series(series: Iterable[Mapping[str, Any]]) -> dict[str, Mapp
     return selected
 
 
+def infer_dynamic_phases(series: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    rows = [dict(item) for item in series]
+    candidates = [row for row in rows if _is_dynamic_contrast_series(row)]
+    if len(candidates) < 3:
+        for row in rows:
+            row.setdefault("metadata_phase", row.get("phase", "other"))
+            row.setdefault("dynamic_phase", "")
+        return rows
+
+    ordered = sorted(candidates, key=_series_order_key)
+    middle = ordered[1:-1]
+    portal = _choose_portal_candidate(middle)
+
+    dynamic_by_uid: dict[str, str] = {str(ordered[0].get("series_uid", "")): "arterial"}
+    dynamic_by_uid[str(ordered[-1].get("series_uid", ""))] = "venous"
+    if portal is not None:
+        dynamic_by_uid[str(portal.get("series_uid", ""))] = "portal"
+    for row in middle:
+        dynamic_by_uid.setdefault(str(row.get("series_uid", "")), "portal")
+
+    for row in rows:
+        metadata_phase = str(row.get("phase", "other"))
+        dynamic_phase = dynamic_by_uid.get(str(row.get("series_uid", "")), "")
+        row["metadata_phase"] = metadata_phase
+        row["dynamic_phase"] = dynamic_phase
+        if dynamic_phase:
+            row["phase"] = dynamic_phase
+    return rows
+
+
 def _num_instances(item: Mapping[str, Any]) -> int:
     try:
         return int(item.get("num_instances", 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _is_dynamic_contrast_series(item: Mapping[str, Any]) -> bool:
+    description = str(item.get("series_description", "") or "").casefold()
+    protocol = str(item.get("protocol_name", "") or "").casefold()
+    text = f"{description} {protocol}"
+    blocked = ("mip", "scout", "dose", "lung", "med", "report")
+    if any(token in text for token in blocked):
+        return False
+    if "1.0" not in description or "_a" not in description:
+        return False
+    return _num_instances(item) >= 100
+
+
+def _series_order_key(item: Mapping[str, Any]) -> tuple[float, str]:
+    raw = item.get("series_number", "")
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        number = float("inf")
+    return number, str(item.get("series_uid", ""))
+
+
+def _choose_portal_candidate(items: list[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    if not items:
+        return None
+    return max(items, key=lambda item: (_num_instances(item), -_series_order_key(item)[0]))

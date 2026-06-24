@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             case_id=config.case_id,
             output_dir=output_dir,
             pipeline_summary=[
-                "DICOM 多序列索引与期相识别",
+                "DICOM 多序列索引、metadata_phase 记录与 dynamic_phase 时序推断",
                 "人工参考标签保持评价专用，不参与分割与参数估计",
                 "TotalSegmentator、配准、多期融合和三维重建接口已纳入 v1 架构",
             ],
@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             ],
             known_limits=[
                 "当前版本尚未执行完整血管分割和三维重建",
-                "静脉期若无独立序列，暂作为可选输入处理",
+                "门静脉最佳序列目前仍需结合图像 HU 增强评分进一步确认",
             ],
         )
         path = write_iteration_log(Path("docs/iterations"), record)

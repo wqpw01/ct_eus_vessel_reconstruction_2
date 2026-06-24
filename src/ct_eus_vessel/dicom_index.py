@@ -7,7 +7,7 @@ from typing import Any
 
 import pydicom
 
-from .phase import classify_phase
+from .phase import classify_phase, infer_dynamic_phases
 
 
 def index_dicom_series(root: str | Path) -> list[dict[str, Any]]:
@@ -44,7 +44,8 @@ def index_dicom_series(root: str | Path) -> list[dict[str, Any]]:
         row = dict(item)
         row["num_instances"] = counts[uid]
         rows.append(row)
-    return sorted(rows, key=lambda row: (-int(row["num_instances"]), str(row["series_number"])))
+    inferred = infer_dynamic_phases(rows)
+    return sorted(inferred, key=lambda row: (-int(row["num_instances"]), str(row["series_number"])))
 
 
 def write_series_index_csv(rows: list[dict[str, Any]], path: str | Path) -> Path:
@@ -53,6 +54,8 @@ def write_series_index_csv(rows: list[dict[str, Any]], path: str | Path) -> Path
     fieldnames = [
         "series_uid",
         "phase",
+        "metadata_phase",
+        "dynamic_phase",
         "num_instances",
         "series_description",
         "protocol_name",
